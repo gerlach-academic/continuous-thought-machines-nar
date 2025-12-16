@@ -1,4 +1,9 @@
-# 🕰️ The Continuous Thought Machine
+# 🕰️ The Continuous Thought Machine for Algorithmic Reasoning
+
+All original code belongs to the original owners, only adaptations made by this organisation are claimed to be new, not original but heavily influenced by literature.
+Major influences are the field of Neural Algorithmic Reasoning, including SALSA-CLRS, CLRS, Discrete Neural Algorithmic Reasoning and more.
+
+# Original README down below:
 
 📚 [PAPER: Technical Report](https://arxiv.org/abs/2505.05522) | 📝 [Blog](https://sakana.ai/ctm/) | 🕹️ [Interactive Website](https://pub.sakana.ai/ctm) | ✏️ [Tutorial](examples/01_mnist.ipynb)
 
