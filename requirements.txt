@@ -15,3 +15,8 @@ datasets
 autoclip
 huggingface_hub
 safetensors
+
+# CLRS algorithmic reasoning (install from GitHub for SALSA-CLRS)
+# pip install git+https://github.com/jkminder/salsa-clrs.git
+torch_geometric
+dm-clrs
