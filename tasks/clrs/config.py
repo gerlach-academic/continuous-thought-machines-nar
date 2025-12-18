@@ -3,6 +3,14 @@ Configuration for CLRS algorithms and task settings.
 """
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
+from enum import Enum
+
+
+class TeacherForcingMode(Enum):
+    """Teacher forcing modes for hint supervision."""
+    NONE = "none"           # No hint supervision, only final output
+    HARD = "hard"           # Strict step-to-iteration mapping
+    SOFT = "soft"           # Certainty-based hint emission
 
 
 @dataclass
@@ -41,6 +49,22 @@ class CLRSConfig:
     training_iterations: int = 50000
     warmup_steps: int = 1000
     
+    # Teacher forcing settings
+    teacher_forcing_mode: str = "none"  # 'none', 'hard', 'soft'
+    
+    # Hard teacher forcing settings
+    iterations_per_hint: int = 1  # CTM iterations per algorithm step
+    
+    # Soft teacher forcing settings
+    certainty_threshold: float = 0.7   # Certainty to trigger hint emission
+    min_iterations_between: int = 2    # Min thinking time between hints
+    max_iterations_per_hint: int = 10  # Max iterations before forcing hint
+    
+    # Hint loss settings
+    hint_loss_weight: float = 1.0      # Weight for hint loss
+    output_loss_weight: float = 1.0    # Weight for output loss
+    progressive_hints: bool = True     # Decay hint weight over training
+    
     # Task-specific output dimension (will be set based on algorithm)
     out_dims: Optional[int] = None
     
@@ -50,6 +74,10 @@ class CLRSConfig:
         if self.graph_generator in ["er", "ws"]:
             kwargs["p_range"] = self.p_range
         return kwargs
+    
+    def get_teacher_forcing_mode(self) -> TeacherForcingMode:
+        """Get the teacher forcing mode as enum."""
+        return TeacherForcingMode(self.teacher_forcing_mode)
 
 
 # Algorithm-specific configurations

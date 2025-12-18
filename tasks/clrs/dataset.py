@@ -187,7 +187,7 @@ class CLRSDatasetAdapter(Dataset):
         Returns:
             inputs: Tensor of shape [max_nodes, input_dim] - node representations
             targets: Tensor of shape [max_nodes, output_dim] or scalar
-            metadata: Dict with additional information (num_nodes, edge_index, etc.)
+            metadata: Dict with additional information (num_nodes, edge_index, hints, etc.)
         """
         data = self._dataset[idx]
         
@@ -219,6 +219,12 @@ class CLRSDatasetAdapter(Dataset):
             "adjacency_mask": adj_mask,
             "algorithm": self.algorithm,
         }
+        
+        # Extract hints if enabled
+        if self.use_hints:
+            hints = self._extract_hints(data, num_nodes)
+            metadata["hints"] = hints
+            metadata["num_hint_steps"] = self._get_num_hint_steps(hints)
         
         return inputs, targets, metadata
     
@@ -455,6 +461,87 @@ class CLRSDatasetAdapter(Dataset):
                 adj_mask[dst, src] = True  # Symmetric for undirected
         
         return adj_mask
+    
+    def _extract_hints(self, data, num_nodes: int) -> Dict[str, torch.Tensor]:
+        """
+        Extract hint sequences from CLRS data.
+        
+        Hints in SALSA-CLRS have shape [N, T, ...] where:
+        - N is the number of nodes
+        - T is the number of algorithm steps
+        
+        We convert to [T, max_nodes, ...] for easier processing.
+        
+        Args:
+            data: PyG CLRSData object
+            num_nodes: Number of nodes in this graph
+            
+        Returns:
+            Dictionary mapping hint names to [T, max_nodes, ...] tensors
+        """
+        hints = {}
+        
+        # Get hint attribute names from data
+        if hasattr(data, 'hints') and data.hints:
+            hint_names = data.hints
+        else:
+            # Infer from specs
+            hint_names = []
+            for key, spec in self.specs.items():
+                if hasattr(spec[0], 'name') and spec[0].name == 'HINT':
+                    hint_names.append(key)
+        
+        for hint_name in hint_names:
+            if not hasattr(data, hint_name):
+                continue
+            
+            hint_data = getattr(data, hint_name)
+            if hint_data is None:
+                continue
+            
+            # Ensure tensor
+            if not isinstance(hint_data, torch.Tensor):
+                hint_data = torch.tensor(hint_data, dtype=torch.float32)
+            
+            # Handle different hint shapes
+            if hint_data.dim() == 1:
+                # Single value per step? or per node?
+                # Treat as [T] -> [T, 1]
+                hint_tensor = hint_data.unsqueeze(-1)
+            elif hint_data.dim() == 2:
+                # [N, T] -> [T, N]
+                hint_tensor = hint_data.transpose(0, 1)
+            elif hint_data.dim() == 3:
+                # [N, T, D] -> [T, N, D]
+                hint_tensor = hint_data.transpose(0, 1)
+            else:
+                # Higher dims: keep as is but swap first two
+                hint_tensor = hint_data.transpose(0, 1)
+            
+            # Pad nodes to max_nodes
+            T = hint_tensor.shape[0]
+            remaining_shape = hint_tensor.shape[2:] if hint_tensor.dim() > 2 else ()
+            
+            if hint_tensor.shape[1] < self.max_nodes:
+                pad_size = self.max_nodes - hint_tensor.shape[1]
+                if remaining_shape:
+                    padding = torch.zeros(T, pad_size, *remaining_shape)
+                else:
+                    padding = torch.zeros(T, pad_size)
+                hint_tensor = torch.cat([hint_tensor, padding], dim=1)
+            elif hint_tensor.shape[1] > self.max_nodes:
+                hint_tensor = hint_tensor[:, :self.max_nodes]
+            
+            hints[hint_name] = hint_tensor.float()
+        
+        return hints
+    
+    def _get_num_hint_steps(self, hints: Dict[str, torch.Tensor]) -> int:
+        """Get number of algorithm steps from hints."""
+        if not hints:
+            return 0
+        first_hint = next(iter(hints.values()))
+        return first_hint.shape[0]
 
 
 def create_clrs_datasets(
@@ -530,5 +617,40 @@ def collate_clrs_batch(batch: List[Tuple]) -> Tuple[torch.Tensor, torch.Tensor, 
         "adjacency_mask": torch.stack([b[2]["adjacency_mask"] for b in batch]),
         "algorithm": batch[0][2]["algorithm"],
     }
+    
+    # Handle hints if present
+    if "hints" in batch[0][2]:
+        # Collate hints - need to handle variable hint lengths across batch
+        all_hints = [b[2]["hints"] for b in batch]
+        hint_steps = [b[2].get("num_hint_steps", 0) for b in batch]
+        max_hint_steps = max(hint_steps) if hint_steps else 0
+        
+        if max_hint_steps > 0:
+            batched_hints = {}
+            hint_names = all_hints[0].keys()
+            
+            for hint_name in hint_names:
+                # Get max T across batch for this hint
+                hint_tensors = [h[hint_name] for h in all_hints if hint_name in h]
+                if not hint_tensors:
+                    continue
+                
+                max_T = max(t.shape[0] for t in hint_tensors)
+                
+                # Pad each hint tensor to max_T and stack
+                padded_hints = []
+                for h in hint_tensors:
+                    T_curr = h.shape[0]
+                    if T_curr < max_T:
+                        # Pad time dimension
+                        pad_shape = (max_T - T_curr,) + h.shape[1:]
+                        padding = torch.zeros(pad_shape, dtype=h.dtype)
+                        h = torch.cat([h, padding], dim=0)
+                    padded_hints.append(h)
+                
+                batched_hints[hint_name] = torch.stack(padded_hints)  # [B, T, N, ...]
+            
+            metadata["hints"] = batched_hints
+            metadata["num_hint_steps"] = torch.tensor(hint_steps)
     
     return inputs, targets, metadata
